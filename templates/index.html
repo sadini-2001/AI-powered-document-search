@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>AI Document Search</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      /* Base */
+      body { background:#0e1117; color:#f8f9fa; }
+      .card { background:#1e1e1e; border:0; color:#f8f9fa; }
+      a, a:hover { color:#9adcff; }
+      .muted { color:#cbd3da; font-size:0.9rem; }
+      .text-secondary { color:#c5ced6 !important; }
+
+      /* Inputs */
+      .form-control{ background:#121418; color:#f8f9fa; border-color:#3a3f44; }
+      .form-control::placeholder{ color:#a8b0b7; opacity:1; }
+
+      /* Buttons */
+      .btn-primary{ background:#4e86ff; border:0; }
+      .btn-outline-light{ color:#f8f9fa; border-color:#6c757d; }
+      .btn-outline-light:hover{ background:#f8f9fa; color:#0e1117; }
+      .btn-danger{ background:#d9534f; border:0; }
+
+      /* Badges / Alerts */
+      .badge-chunk{ background:#343a40; color:#f8f9fa; }
+      .badge-good{ background:#198754; } /* >= 80% */
+      .badge-mid{ background:#ffc107; color:#121418; } /* 50–80% */
+      .badge-low{ background:#dc3545; } /* < 50% */
+      .alert{ background:#10141a; color:#e9ecef; border-color:#2b3036; }
+      .alert-info{ background:rgba(78,134,255,.12); color:#dbe4ff; border-color:#4e86ff33; }
+
+      /* Dark tables */
+      .table { background-color:#1e1e1e !important; color:#f8f9fa !important; }
+      .table th, .table td { background-color:#1e1e1e !important; color:#f8f9fa !important; border-color:#2b3036 !important; }
+      .table thead th { background-color:#2b2f33 !important; color:#ffffff !important; }
+
+      /* Code/Results block */
+      pre { background:#121418; color:#f8f9fa; border-radius:.5rem; padding:.75rem; }
+
+      /* Optional: nav link highlight */
+      .nav-link { color:#cbd3da; }
+      .nav-link.active { color:#f8f9fa; border-bottom:2px solid #4e86ff; }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+
+      <!-- Header + mini nav -->
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <div>
+          <h1 class="mb-1">🧠 AI-Powered Document Search</h1>
+          <span class="muted">
+            FAISS • MiniLM • Flask • SQLite • Bootstrap ·
+            <a href="/">Home</a> · <a href="/analytics">Analytics</a>
+          </span>
+        </div>
+      </div>
+
+      <p class="text-secondary mb-4">Upload PDFs/TXT → semantic search with embeddings + FAISS.</p>
+
+      <div class="row g-4">
+        <div class="col-lg-8">
+          <!-- Upload -->
+          <div class="card p-3 mb-4">
+            <h5 class="mb-3">Upload documents</h5>
+            <form method="POST" action="/upload" enctype="multipart/form-data" class="row g-3">
+              <div class="col-md-8">
+                <input class="form-control" type="file" name="files" multiple required accept=".pdf,.txt">
+              </div>
+              <div class="col-md-4 d-grid">
+                <button class="btn btn-primary" type="submit">Upload & Index</button>
+              </div>
+            </form>
+            {% if message %}
+              <div class="alert alert-info mt-3">{{ message|safe }}</div>
+            {% endif %}
+          </div>
+
+          <!-- Search -->
+          <div class="card p-3 mb-4">
+            <h5 class="mb-3">Semantic search</h5>
+            <form method="GET" action="/search" class="row g-3">
+              <div class="col-md-9">
+                <input class="form-control" name="q" placeholder="e.g., 'cancellation policy'" required
+                       value="{{ request.args.get('q','') if request else '' }}">
+              </div>
+              <div class="col-md-3 d-grid">
+                <button class="btn btn-primary" type="submit">Search</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Results -->
+          {% if results %}
+          <div class="card p-3 mb-4">
+            <h5 class="mb-3">Results</h5>
+            {% for r in results %}
+              {% set pct = (r.score * 100.0) | float %}
+              {% if pct >= 80 %}{% set badge = "badge-good" %}
+              {% elif pct >= 50 %}{% set badge = "badge-mid" %}
+              {% else %}{% set badge = "badge-low" %}{% endif %}
+              <div class="mb-3">
+                <span class="badge {{ badge }} me-2">Match: {{ "%.1f"|format(pct) }}%</span>
+                <span class="badge badge-chunk">Source: {{ r.metadata.source }}</span>
+                <pre class="mt-2" style="white-space: pre-wrap; font-size:0.95rem;">{{ r.page_content }}</pre>
+              </div>
+              {% if not loop.last %}<hr>{% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          <!-- Analytics card (only appears when /analytics sets chart_* vars) -->
+          {% if chart_labels and chart_values %}
+          <div class="card p-3 mb-4">
+            <h5 class="mb-3">Top 10 keywords (across uploaded docs)</h5>
+            <canvas id="topTermsChart" height="120"></canvas>
+            {% if not recent or recent|length == 0 %}
+              <p class="muted mt-3">Upload some files first to see keyword frequencies.</p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- Sidebar: recent uploads -->
+        <div class="col-lg-4">
+          <div class="card p-3">
+            <h5 class="mb-3">Recent uploads</h5>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead>
+                  <tr>
+                    <th>File</th>
+                    <th class="text-end">Size (KB)</th>
+                    <th>When</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for d in recent %}
+                  <tr>
+                    <td>{{ d.filename }}</td>
+                    <td class="text-end">{{ '%.1f'|format(d.size_kb) }}</td>
+                    <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>
+                      <!-- Delete button (works with POST /delete/<id>) -->
+                      <form method="POST" action="/delete/{{ d.id }}" style="display:inline;"
+                            onsubmit="return confirm('Delete {{ d.filename }}?');">
+                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                      </form>
+                    </td>
+                  </tr>
+                  {% else %}
+                  <tr><td colspan="4" class="muted">No uploads yet.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <div class="mt-2">
+              <a href="/analytics" class="btn btn-sm btn-outline-light">View Analytics</a>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Chart.js only loads/executes if chart data present -->
+    {% if chart_labels and chart_values %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      const labels = {{ (chart_labels or [])|tojson }};
+      const values = {{ (chart_values or [])|tojson }};
+      if (labels.length > 0) {
+        const ctx = document.getElementById('topTermsChart').getContext('2d');
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [{ label: 'Frequency', data: values }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              x: { ticks: { color: '#e9ecef' } },
+              y: { ticks: { color: '#e9ecef' }, beginAtZero: true }
+            },
+            plugins: { legend: { labels: { color: '#e9ecef' } } }
+          }
+        });
+      }
+    </script>
+    {% endif %}
+  </body>
+</html>
