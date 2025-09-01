@@ -21,6 +21,7 @@ Clone the repo:
 ```bash
 git clone https://github.com/<your-username>/AI-Document-Search.git
 cd AI-Document-Search
+```
 
 ---
 
